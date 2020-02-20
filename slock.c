@@ -18,11 +18,14 @@
 #include <X11/keysym.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <Imlib2.h>
 
 #include "arg.h"
 #include "util.h"
 
 char *argv0;
+
+Imlib_Image image;
 
 enum {
 	INIT,
@@ -35,6 +38,7 @@ struct lock {
 	int screen;
 	Window root, win;
 	Pixmap pmap;
+	Pixmap bgmap;
 	unsigned long colors[NUMCOLS];
 };
 
@@ -140,6 +144,12 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 	failure = 0;
 	oldc = INIT;
 
+	for (screen = 0; screen < nscreens; screen++) {
+		if(locks[screen]->bgmap) {
+			XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
+		}
+		XClearWindow(dpy, locks[screen]->win);
+	}
 	while (running && !XNextEvent(dpy, &ev)) {
 		if (ev.type == KeyPress) {
 			explicit_bzero(&buf, sizeof(buf));
@@ -189,12 +199,16 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 			}
 			color = len ? INPUT : ((failure || failonclear) ? FAILED : INIT);
 			if (running && oldc != color) {
-				for (screen = 0; screen < nscreens; screen++) {
-					XSetWindowBackground(dpy,
-					                     locks[screen]->win,
-					                     locks[screen]->colors[color]);
-					XClearWindow(dpy, locks[screen]->win);
-				}
+				//for (screen = 0; screen < nscreens; screen++) {
+				//	if(locks[screen]->bgmap) {
+				//		XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
+				//	} else {
+				//		XSetWindowBackground(dpy,
+				//							 locks[screen]->win,
+				//							 locks[screen]->colors[color]);
+				//	}
+				//	XClearWindow(dpy, locks[screen]->win);
+				//}
 				oldc = color;
 			}
 		} else if (rr->active && ev.type == rr->evbase + RRScreenChangeNotify) {
@@ -211,6 +225,13 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 					XClearWindow(dpy, locks[screen]->win);
 					break;
 				}
+			}
+		} else if (ev.type == KeyRelease) {
+			for (screen = 0; screen < nscreens; screen++) {
+				if(locks[screen]->bgmap) {
+					XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
+				}
+				XClearWindow(dpy, locks[screen]->win);
 			}
 		} else {
 			for (screen = 0; screen < nscreens; screen++)
@@ -234,6 +255,18 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 
 	lock->screen = screen;
 	lock->root = RootWindow(dpy, lock->screen);
+	lock->bgmap = 0;
+
+    if(image) {
+        lock->bgmap = XCreatePixmap(dpy, lock->root, DisplayWidth(dpy, lock->screen), DisplayHeight(dpy, lock->screen), DefaultDepth(dpy, lock->screen));
+        imlib_context_set_image(image);
+        imlib_context_set_display(dpy);
+        imlib_context_set_visual(DefaultVisual(dpy, lock->screen));
+        imlib_context_set_colormap(DefaultColormap(dpy, lock->screen));
+        imlib_context_set_drawable(lock->bgmap);
+        imlib_render_image_on_drawable(0, 0);
+        imlib_free_image();
+    }
 
 	for (i = 0; i < NUMCOLS; i++) {
 		XAllocNamedColor(dpy, DefaultColormap(dpy, lock->screen),
@@ -251,6 +284,9 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	                          CopyFromParent,
 	                          DefaultVisual(dpy, lock->screen),
 	                          CWOverrideRedirect | CWBackPixel, &wa);
+ 	if(lock->bgmap)
+		XSetWindowBackgroundPixmap(dpy, lock->win, lock->bgmap);
+
 	lock->pmap = XCreateBitmapFromData(dpy, lock->win, curs, 8, 8);
 	invisible = XCreatePixmapCursor(dpy, lock->pmap, lock->pmap,
 	                                &color, &color, 0, 0);
@@ -319,6 +355,11 @@ main(int argc, char **argv) {
 	case 'v':
 		fprintf(stderr, "slock-"VERSION"\n");
 		return 0;
+	case 'i':
+		image = imlib_load_image_immediately_without_cache(argv[1]);
+		if(!image)
+			die("slock: unable to load image\n");
+		break;
 	default:
 		usage();
 	} ARGEND
